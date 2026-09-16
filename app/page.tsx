@@ -46,7 +46,9 @@ import {
 } from "@/lib/song-count";
 import { MIXED_MIN_CONTRIBUTORS, startState, type SetupMode } from "@/lib/start-status";
 
-const CLIP_DURATIONS = [5, 10, 15, 20, 30];
+// Rounds escalate from 0.1s to 0.5s, 2s and 5s. This remains in the saved
+// payload and analytics field for backward compatibility with open games.
+const FINAL_CLIP_DURATION = 5;
 const MIXED_SAMPLE_COUNTS = [5, 8, 10, 12];
 
 /**
@@ -141,7 +143,6 @@ export default function SetupPage() {
   const [setupMode, setSetupMode] = useState<SetupMode>("single");
   const [playlistUrl, setPlaylistUrl] = useState("");
   const [players, setPlayers] = useState<string[]>(["", ""]);
-  const [clipDuration, setClipDuration] = useState(15);
   // Selected count + the custom field's text, moved together so the transitions
   // between them stay in lib/song-count.ts where the suite can reach them.
   const [songCount, setSongCount] = useState(DEFAULT_SONG_COUNT_STATE);
@@ -240,7 +241,7 @@ export default function SetupPage() {
         tracks: data.tracks,
         players: data.players.map((name) => ({ name, score: 0 })),
         playlistName: `${data.players.length}-Player Mix`,
-        clipDuration,
+        clipDuration: FINAL_CLIP_DURATION,
         totalTracks: data.tracks.length,
         playlistSource: "mixed",
         mode: room ? "buzzer" : "party",
@@ -255,7 +256,7 @@ export default function SetupPage() {
       if (!saveGame(payload)) throw new AppError("storage_blocked");
       trackEvent("game_started", {
         player_count: data.players.length,
-        clip_duration: clipDuration,
+        clip_duration: FINAL_CLIP_DURATION,
         song_count: data.tracks.length,
         playlist_source: "mixed",
         game_mode: room ? "buzzer" : "party",
@@ -404,7 +405,7 @@ export default function SetupPage() {
         // players the room reports.
         players: room ? [] : validPlayers.map((name) => ({ name, score: 0 })),
         playlistName: data.name,
-        clipDuration,
+        clipDuration: FINAL_CLIP_DURATION,
         totalTracks: data.totalTracks,
         playlistSource: "own",
         mode: room ? "buzzer" : "party",
@@ -418,7 +419,7 @@ export default function SetupPage() {
         // screen. The typed count is 0 for every buzzer game, so reporting it
         // would quietly zero out the metric for the mode we care most about.
         player_count: room ? buzzerPlayerCount + 1 : validPlayers.length,
-        clip_duration: clipDuration,
+        clip_duration: FINAL_CLIP_DURATION,
         song_count: limited.length,
         playlist_source: "own",
         game_mode: room ? "buzzer" : "party",
@@ -535,7 +536,7 @@ export default function SetupPage() {
         tracks: pooled,
         players: mixedContributions.map((c) => ({ name: c.name, score: 0 })),
         playlistName: `${mixedContributions.length}-Player Mix`,
-        clipDuration,
+        clipDuration: FINAL_CLIP_DURATION,
         totalTracks: pooled.length,
         playlistSource: "mixed",
         mode: room ? "buzzer" : "party",
@@ -550,7 +551,7 @@ export default function SetupPage() {
       if (!saveGame(payload)) throw new AppError("storage_blocked");
       trackEvent("game_started", {
         player_count: mixedContributions.length,
-        clip_duration: clipDuration,
+        clip_duration: FINAL_CLIP_DURATION,
         song_count: pooled.length,
         playlist_source: "mixed",
         game_mode: room ? "buzzer" : "party",
@@ -791,7 +792,7 @@ export default function SetupPage() {
               <div className="settings-row">
                 <p className="settings-summary">
                   {[
-                    `${clipDuration}s clips`,
+                    "0.1s → 0.5s → 2s → 5s clips",
                     setupMode === "mixed"
                       ? `${sampledPerPlayer} songs per player`
                       : songCount.count === "all"
@@ -816,22 +817,6 @@ export default function SetupPage() {
                   id="setup-settings"
                   style={{ display: "flex", flexDirection: "column", gap: "20px", marginTop: "16px" }}
                 >
-                  {/* Clip Duration */}
-                  <div>
-                    <p className="section-label">Clip Duration</p>
-                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                      {CLIP_DURATIONS.map((d) => (
-                        <button
-                          key={d}
-                          className={`pill${clipDuration === d ? " active" : ""}`}
-                          onClick={() => setClipDuration(d)}
-                        >
-                          {d}s
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
                   {/* Number of Songs — single-playlist mode only; mixed mode uses per-player sampling instead */}
                   {setupMode === "single" && (
                     <div>

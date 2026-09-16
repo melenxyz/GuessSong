@@ -35,6 +35,12 @@ import {
 } from "@/lib/result-image";
 import { loopQrDataUrl } from "@/lib/loop-qr";
 import { reportLoopImpression } from "@/lib/loop-client";
+import {
+  CLIP_STEPS_MS,
+  DEFAULT_CLIP_STEP,
+  clipLabel,
+  nextClipStep,
+} from "@/lib/clip-progress";
 
 type Phase = "waiting" | "playing" | "guessing" | "revealed" | "finished";
 
@@ -98,7 +104,7 @@ export default function GamePage() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [playlistName, setPlaylistName] = useState("");
-  const [clipDuration, setClipDuration] = useState(15);
+  const [clipStep, setClipStep] = useState(DEFAULT_CLIP_STEP);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [phase, setPhase] = useState<Phase>("waiting");
   const [roundWinner, setRoundWinner] = useState<string | null>(null);
@@ -197,6 +203,11 @@ export default function GamePage() {
           Reveal Answer →
         </button>
         <div className="clip-secondary">
+          {nextClipStepIndex !== null && (
+            <button className="btn-ghost compact" onClick={playLongerClip}>
+              Need more? Play {clipLabel(CLIP_STEPS_MS[nextClipStepIndex])}
+            </button>
+          )}
           {audioPlaying ? (
             <button className="btn-ghost compact" onClick={holdClip}>
               Stop
@@ -261,7 +272,6 @@ export default function GamePage() {
     setTracks(data.tracks);
     setPlayers(data.players);
     setPlaylistName(data.playlistName);
-    setClipDuration(data.clipDuration);
     setPlaylistSource(data.playlistSource);
     setMode(data.mode);
     setBuzzerRoom(data.buzzerRoom ?? null);
@@ -363,8 +373,7 @@ export default function GamePage() {
    * however much of the clip is left. Called once when a clip starts, and again
    * on every resume.
    */
-  const startClipTimers = useCallback(() => {
-    const totalMs = clipDuration * 1000;
+  const startClipTimers = useCallback((totalMs: number) => {
     clipSegmentStartRef.current = Date.now();
     progressIntervalRef.current = setInterval(() => {
       const elapsed = clipElapsedRef.current + (Date.now() - clipSegmentStartRef.current);
@@ -379,7 +388,7 @@ export default function GamePage() {
       setProgress(100);
       setPhase("guessing");
     }, Math.max(0, totalMs - clipElapsedRef.current));
-  }, [clipDuration]);
+  }, []);
 
   /**
    * Hold the music where it is, without ending the round. Someone buzzing in is
@@ -410,13 +419,13 @@ export default function GamePage() {
     // Only re-arm the end-of-clip deadline if any of the clip is left. Past
     // that the host is deliberately playing on, so there is nothing left to
     // count down to and we stay put rather than snapping the phase around.
-    if (clipElapsedRef.current < clipDuration * 1000) {
-      startClipTimers();
+    if (clipElapsedRef.current < CLIP_STEPS_MS[clipStep]) {
+      startClipTimers(CLIP_STEPS_MS[clipStep]);
       setPhase("playing");
     } else {
       clipSegmentStartRef.current = Date.now();
     }
-  }, [clipDuration, startClipTimers]);
+  }, [clipStep, startClipTimers]);
 
   /** Stop the music and ask the room. The clip stays resumable. */
   const holdClip = useCallback(() => {
@@ -435,11 +444,11 @@ export default function GamePage() {
     audio.play().catch(() => {});
     setClipPaused(false);
     setProgress(0);
-    startClipTimers();
+    startClipTimers(CLIP_STEPS_MS[clipStep]);
     setPhase("playing");
-  }, [startClipTimers]);
+  }, [clipStep, startClipTimers]);
 
-  async function playClip() {
+  async function playClip(step = clipStep) {
     const audio = audioRef.current;
     const track = tracks[currentIndex];
     if (!audio || !track) return;
@@ -517,7 +526,31 @@ export default function GamePage() {
     setProgress(0);
     clipElapsedRef.current = 0;
     setClipPaused(false);
-    startClipTimers();
+    startClipTimers(CLIP_STEPS_MS[step]);
+  }
+
+  /** Give the room the next, longer clue without revealing the answer. */
+  function playLongerClip() {
+    const nextStep = nextClipStep(clipStep);
+    if (nextStep === null) return;
+
+    setClipStep(nextStep);
+    const audio = audioRef.current;
+    if (!audio?.src) {
+      void playClip(nextStep);
+      return;
+    }
+
+    if (clipTimeoutRef.current) clearTimeout(clipTimeoutRef.current);
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    audio.pause();
+    audio.currentTime = 0;
+    clipElapsedRef.current = 0;
+    setProgress(0);
+    setClipPaused(false);
+    audio.play().catch(() => {});
+    setPhase("playing");
+    startClipTimers(CLIP_STEPS_MS[nextStep]);
   }
 
   /**
@@ -707,6 +740,7 @@ export default function GamePage() {
     } else {
       setCurrentIndex((i) => i + 1);
       setPhase("waiting");
+      setClipStep(DEFAULT_CLIP_STEP);
       setRoundWinner(null);
       setAlbumWinner(null);
       setSourceWinner(null);
@@ -936,6 +970,8 @@ export default function GamePage() {
   }
 
   const currentTrack = tracks[currentIndex];
+  const currentClipDurationMs = CLIP_STEPS_MS[clipStep];
+  const nextClipStepIndex = nextClipStep(clipStep);
   const albumArt = currentTrack?.albumImageUrl || ALBUM_PLACEHOLDER;
   const isRevealed = phase === "revealed" || phase === "finished";
   const showAlbumArt = isRevealed || albumHintShown;
@@ -1636,7 +1672,7 @@ export default function GamePage() {
               {/* Play button overlay */}
               {phase === "waiting" && !noAudio && (
                 <div className="album-overlay">
-                  <button className="play-btn" onClick={playClip} aria-label="Play clip" disabled={previewLoading} style={previewLoading ? { opacity: 0.5, cursor: "not-allowed" } : {}}>
+                  <button className="play-btn" onClick={() => void playClip()} aria-label="Play clip" disabled={previewLoading} style={previewLoading ? { opacity: 0.5, cursor: "not-allowed" } : {}}>
                     {previewLoading ? (
                       <div style={{ width: "24px", height: "24px", border: "3px solid rgba(0,0,0,0.3)", borderTop: "3px solid #000", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
                     ) : (
@@ -1681,6 +1717,12 @@ export default function GamePage() {
               </div>
             )}
 
+            {(phase === "playing" || phase === "guessing") && (
+              <p style={{ textAlign: "center", color: "#777", fontSize: "12px", marginTop: "10px" }}>
+                Clip {clipLabel(currentClipDurationMs)} of 5s
+              </p>
+            )}
+
             {/* Buzzer Mode: the room code, the queue, and the host's verdict
                 buttons. Rendered above the phase content so the host's eyes and
                 thumb stay in one place all game. Absent unless a room was
@@ -1715,7 +1757,7 @@ export default function GamePage() {
                   skipControls()
                 ) : (
                   <p style={{ color: "#555", fontSize: "13px", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                    Press Play to start the clip
+                    Press Play for the 0.1s clue
                   </p>
                 )}
               </div>
